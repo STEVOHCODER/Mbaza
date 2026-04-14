@@ -1,0 +1,5 @@
+backend/.env
+*.db
+__pycache__/
+*.pyc
+output/

@@ -5,7 +5,7 @@ export const handleGoogleLogin = async (credentialResponse: any, onSuccess: (dat
     const token = credentialResponse.credential;
     
     // Send the token to your backend
-    const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/auth/google`, {
+    const response = await fetch(`${import.meta.env.VITE_API_URL || 'https://mbaza-mzf3.onrender.com'}/api/auth/google`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token }),

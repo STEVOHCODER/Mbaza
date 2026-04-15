@@ -38,7 +38,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const login = async (email: string, password: string) => {
     setLoading(true);
-    const apiUrl = `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/auth/login`;
+    const apiUrl = `${import.meta.env.VITE_API_URL || 'https://mbaza-mzf3.onrender.com'}/api/auth/login`;
     console.log('Calling login endpoint:', apiUrl);
     try {
       const response = await fetch(apiUrl, {
@@ -70,7 +70,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const register = async (email: string, password: string, name?: string) => {
     setLoading(true);
-    const apiUrl = `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/auth/register`;
+    const apiUrl = `${import.meta.env.VITE_API_URL || 'https://mbaza-mzf3.onrender.com'}/api/auth/register`;
     console.log('Calling register endpoint:', apiUrl);
     try {
       const response = await fetch(apiUrl, {

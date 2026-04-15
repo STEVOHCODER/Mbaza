@@ -40,7 +40,7 @@ if DATABASE_URL.startswith("postgres://"):
 
 # ---------------- GEMINI / OLLAMA ----------------
 GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
+OLLAMA_URL = os.getenv("OLLAMA_URL", "https://ollama.com/api/generate")
 LOCAL_MODEL = os.getenv("OLLAMA_MODEL", "gemma3:1b")
 
 JWT_SECRET = os.getenv("JWT_SECRET", "change-this-secret-before-deploy")

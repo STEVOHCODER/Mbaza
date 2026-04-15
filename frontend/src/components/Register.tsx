@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { Heart, Mail, Lock, User, ArrowRight } from 'lucide-react';
+import { Heart, Mail, Lock,ArrowRight } from 'lucide-react';
 
 interface RegisterProps {
   onSwitchToLogin: () => void;

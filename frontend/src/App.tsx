@@ -136,6 +136,9 @@ export default function App() {
   const [messages, setMessages] = useState<any[]>([]);
   const [status, setStatus] = useState('Ready');
   const wsRef = useRef<WebSocket | null>(null);
+  const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttempts = useRef(0);
+
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(true);
   const [activeTab, setActiveTab] = useState<'calendar' | 'period'>('period');
@@ -174,6 +177,7 @@ export default function App() {
       localStorage.setItem(userSessionsKey, JSON.stringify(sessions));
     }
   }, [sessions, isAuthenticated, userSessionsKey]);
+
   useEffect(() => { if (currentSessionId) setSessions(prev => prev.map(s => s.id === currentSessionId ? { ...s, messages } : s)); }, [messages]);
   useEffect(() => { if (messagesEndRef.current) messagesEndRef.current.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
@@ -188,6 +192,7 @@ export default function App() {
 
   const loadSession = (id: string, currentList?: any[]) => { 
     if (currentSessionId === id) return;
+    reconnectAttempts.current = 0; // reset reconnect counter on session switch
     setCurrentSessionId(id); 
     const list = currentList || sessions; 
     const sess = list.find((s:any) => s.id === id); 
@@ -197,23 +202,54 @@ export default function App() {
   const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://mbaza-mzf3.onrender.com';
   const WS_URL = API_BASE_URL ? API_BASE_URL.replace('http', 'ws') : `ws://${window.location.hostname}:8000`;
 
+  // ─── WebSocket with auto-reconnect ───────────────────────────────────────
   useEffect(() => {
-    if (currentSessionId && isAuthenticated) {
-      if (wsRef.current) wsRef.current.close();
+    if (!currentSessionId || !isAuthenticated) return;
+
+    let isMounted = true;
+
+    const connect = () => {
+      if (!isMounted) return;
+
       const socket = new WebSocket(`${WS_URL}/ws/${currentSessionId}`);
-      socket.onopen = () => { setStatus('Mbaza Online'); };
+      wsRef.current = socket;
+
+      socket.onopen = () => {
+        if (!isMounted) return;
+        reconnectAttempts.current = 0; // reset on successful connection
+        setStatus('Mbaza Online');
+      };
+
       socket.onmessage = (event) => {
         const data = JSON.parse(event.data);
         if (data.type === 'result') {
           setMessages((prev) => [...prev, { role: 'assistant', content: data.content }]);
-          setStatus('Ready'); setIsAiTyping(false);
+          setStatus('Ready');
+          setIsAiTyping(false);
         }
       };
-      socket.onclose = () => setStatus('Disconnected');
-      wsRef.current = socket;
-    }
-    return () => { if (wsRef.current) wsRef.current.close(); };
+
+      socket.onclose = () => {
+        if (!isMounted) return;
+        const attempts = reconnectAttempts.current;
+        const delay = Math.min(1000 * Math.pow(2, attempts), 30000); // 1s, 2s, 4s … max 30s
+        setStatus(`Reconnecting in ${Math.round(delay / 1000)}s…`);
+        reconnectAttempts.current += 1;
+        reconnectRef.current = setTimeout(connect, delay);
+      };
+
+      socket.onerror = () => socket.close(); // triggers onclose → retry
+    };
+
+    connect();
+
+    return () => {
+      isMounted = false;
+      if (reconnectRef.current) clearTimeout(reconnectRef.current);
+      if (wsRef.current) wsRef.current.close();
+    };
   }, [currentSessionId, isAuthenticated]);
+  // ─────────────────────────────────────────────────────────────────────────
 
   const sendMessage = async () => {
     const inputEl = document.getElementById('main-input') as HTMLInputElement;
@@ -330,7 +366,7 @@ export default function App() {
           <div className="flex items-center gap-2 md:gap-4">
             <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 text-[#6b7fa8] hover:text-white bg-[#161b22] border border-[#30363d] rounded-xl transition-all"><PanelLeftOpen size={20} /></button>
             <h2 className="text-[10px] font-black text-[#6b7fa8] uppercase tracking-[0.2em] md:tracking-[0.4em] flex items-center gap-2 italic">
-              <div className={"w-2 h-2 rounded-full animate-pulse " + (isAiTyping ? 'bg-[#29d8a8]' : 'bg-gray-600')}/> 
+              <div className={"w-2 h-2 rounded-full animate-pulse " + (isAiTyping ? 'bg-[#29d8a8]' : status.startsWith('Reconnecting') ? 'bg-yellow-400' : status === 'Mbaza Online' || status === 'Ready' ? 'bg-[#29d8a8]' : 'bg-gray-600')}/> 
               <span className="hidden sm:inline">{status}</span>
             </h2>
           </div>
@@ -391,8 +427,10 @@ export default function App() {
           </div>
         </div>
       </div>
+
       {showAddEvent && (<div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/85 backdrop-blur-md animate-in fade-in duration-300"><div className="bg-[#0d1117] border border-[#30363d] w-full max-w-md rounded-[3rem] p-12 shadow-2xl relative border-t-[#29d8a8]/30"><button onClick={() => setShowAddEvent(false)} className="absolute top-8 right-8 text-[#6b7fa8] hover:text-white transition-all"><X size={24} /></button><h2 className="text-2xl font-black text-white tracking-tight mb-10">New Calendar Event</h2><div className="space-y-5"><div className="space-y-2"><label className="text-[10px] font-black text-[#6b7fa8] uppercase tracking-widest ml-2">Event Title</label><input type="text" value={newEvent.title} onChange={e => setNewEvent({...newEvent, title: e.target.value})} className="w-full bg-[#161b22] border border-[#30363d] rounded-2xl px-6 py-4 text-sm text-white focus:border-[#29d8a8] outline-none transition-all" placeholder="Health checkup, reminder, etc." /></div><div className="space-y-2"><label className="text-[10px] font-black text-[#6b7fa8] uppercase tracking-widest ml-2">Date</label><input type="date" value={newEvent.date} onChange={e => setNewEvent({...newEvent, date: e.target.value})} className="w-full bg-[#161b22] border border-[#30363d] rounded-2xl px-6 py-4 text-sm text-white focus:border-[#29d8a8] outline-none appearance-none" /></div><button onClick={addCalendarEvent} className="w-full py-5 bg-[#29d8a8] text-[#0a0c10] font-black text-xs uppercase tracking-[0.2em] rounded-2xl mt-6 hover:scale-[1.02] active:scale-95 transition-all shadow-glow">Schedule Event</button></div></div></div>)}
       {showAddPeriod && (<div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/85 backdrop-blur-md animate-in fade-in duration-300"><div className="bg-[#0d1117] border border-[#30363d] w-full max-w-md rounded-[3rem] p-12 shadow-2xl relative border-t-[#ff7eb3]/30"><button onClick={() => setShowAddPeriod(false)} className="absolute top-8 right-8 text-[#6b7fa8] hover:text-white transition-all"><X size={24} /></button><h2 className="text-2xl font-black text-white tracking-tight mb-10 text-center">Log My Cycle</h2><div className="space-y-5"><div className="space-y-2"><label className="text-[10px] font-black text-[#6b7fa8] uppercase tracking-widest ml-2">Start Date</label><input type="date" value={newPeriod.start_date} onChange={e => setNewPeriod({...newPeriod, start_date: e.target.value})} className="w-full bg-[#161b22] border border-[#30363d] rounded-2xl px-6 py-4 text-sm text-white focus:border-[#ff7eb3] outline-none" /></div><div className="space-y-2"><label className="text-[10px] font-black text-[#6b7fa8] uppercase tracking-widest ml-2">Intensity</label><select value={newPeriod.intensity} onChange={e => setNewPeriod({...newPeriod, intensity: e.target.value})} className="w-full bg-[#161b22] border border-[#30363d] rounded-2xl px-6 py-4 text-sm text-white focus:border-[#ff7eb3] outline-none appearance-none"><option value="light">Light Flow</option><option value="medium">Medium Flow</option><option value="heavy">Heavy Flow</option></select></div><textarea value={newPeriod.notes} onChange={e => setNewPeriod({...newPeriod, notes: e.target.value})} className="w-full bg-[#161b22] border border-[#30363d] rounded-2xl p-6 text-sm text-white h-32 focus:border-[#ff7eb3] outline-none" placeholder="Notes on mood, symptoms, or energy..." /><button onClick={addPeriodEntry} className="w-full py-5 bg-[#ff7eb3] text-[#0a0c10] font-black text-xs uppercase tracking-[0.2em] rounded-2xl mt-6 hover:scale-[1.02] active:scale-95 transition-all shadow-[0_0_20px_rgba(255,126,179,0.3)]">Save to My History</button></div></div></div>)}
+
       <style>{" .custom-scroll::-webkit-scrollbar { width: 4px; } .custom-scroll::-webkit-scrollbar-track { background: transparent; } .custom-scroll::-webkit-scrollbar-thumb { background: #30363d; border-radius: 10px; } .custom-markdown pre { background: #0d1117 !important; padding: 1.5rem !important; border-radius: 1.5rem !important; border: 1px solid #30363d !important; overflow-x: auto !important; } .custom-markdown code { font-family: 'JetBrains Mono', monospace !important; color: #29d8a8; font-size: 0.85rem; } .shadow-glow { filter: drop-shadow(0 0 12px rgba(41,216,168,0.4)); } "}</style>
     </div>
   );

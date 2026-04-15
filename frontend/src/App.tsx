@@ -203,7 +203,9 @@ export default function App() {
   const API_BASE_URL =
     import.meta.env.VITE_API_URL || "https://mbaza-mzf3.onrender.com";
 
-  const WS_BASE_URL = API_BASE_URL.replace(/^http/, "ws");
+  const WS_BASE_URL = API_BASE_URL
+    .replace("https://", "wss://")
+    .replace("http://", "ws://");
   // ─── WebSocket with auto-reconnect ───────────────────────────────────────
   useEffect(() => {
     if (!currentSessionId || !isAuthenticated) return;

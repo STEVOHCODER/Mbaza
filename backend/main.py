@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import bcrypt
-import httpx
 import jwt
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
@@ -38,10 +37,8 @@ if not DATABASE_URL:
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-# ---------------- GEMINI / OLLAMA ----------------
+# ---------------- GEMINI ----------------
 GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
-OLLAMA_URL = os.getenv("OLLAMA_URL", "https://ollama.com/api/generate")
-LOCAL_MODEL = os.getenv("OLLAMA_MODEL", "gemma3:1b")
 
 JWT_SECRET = os.getenv("JWT_SECRET", "change-this-secret-before-deploy")
 JWT_ALGORITHM = "HS256"
@@ -49,7 +46,6 @@ ACCESS_TOKEN_EXPIRE_DAYS = int(os.getenv("ACCESS_TOKEN_EXPIRE_DAYS", "7"))
 
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 GEMINI_TIMEOUT_SECONDS = float(os.getenv("GEMINI_TIMEOUT_SECONDS", "6"))
-OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "45"))
 
 MBAZA_SYSTEM_PROMPT = (
     "You are Mbaza, an expert youth sexual and reproductive health consultant. "
@@ -212,47 +208,16 @@ def get_gemini_reply(prompt: str) -> str:
 
     raise RuntimeError("Gemini returned an empty response")
 
-async def get_ollama_reply(prompt: str) -> str:
-    payload = {
-        "model": LOCAL_MODEL,
-        "prompt": f"{MBAZA_SYSTEM_PROMPT}\n\n{prompt}",
-        "stream": False,
-    }
-
-    timeout = httpx.Timeout(OLLAMA_TIMEOUT_SECONDS)
-    async with httpx.AsyncClient(timeout=timeout) as http_client:
-        response = await http_client.post(OLLAMA_URL, json=payload)
-        response.raise_for_status()
-        data = response.json()
-
-    text = (data.get("response") or "").strip()
-    if text:
-        return text
-
-    raise RuntimeError("Ollama returned an empty response")
-
 async def generate_chat_reply(sid: str, user_message: str) -> str:
     prompt = build_chat_prompt(sid, user_message)
-    errors: List[str] = []
-
-    if client:
-        try:
-            return await asyncio.to_thread(get_gemini_reply, prompt)
-        except Exception as exc:
-            logger.exception("Gemini chat request failed for session %s", sid)
-            errors.append(f"Gemini: {exc}")
-
     try:
-        return await get_ollama_reply(prompt)
+        return await asyncio.to_thread(get_gemini_reply, prompt)
     except Exception as exc:
-        logger.exception("Ollama chat request failed for session %s", sid)
-        errors.append(f"Ollama: {exc}")
-
-    logger.error("All chat providers failed for session %s: %s", sid, " | ".join(errors))
-    return (
-        "I could not reach the AI provider right now. "
-        "Please check `GEMINI_API_KEY` or make sure Ollama is running, then try again."
-    )
+        logger.exception("Gemini chat request failed for session %s", sid)
+        return (
+            "I could not reach Gemini right now. "
+            "Please check `GEMINI_API_KEY` and `GEMINI_MODEL`, then try again."
+        )
 
 # ---------------- AUTH ----------------
 @app.post("/api/auth/register")

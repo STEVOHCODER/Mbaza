@@ -353,21 +353,47 @@ manager = ConnectionManager()
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
     await manager.connect(websocket, session_id)
+
     try:
         while True:
-            payload = json.loads(await websocket.receive_text())
-            message = payload.get("message")
-            if not message or not isinstance(message, str):
-                await manager.send({"type": "error", "content": "Invalid message payload."}, websocket)
+            data = await websocket.receive_text()
+
+            try:
+                payload = json.loads(data)
+            except json.JSONDecodeError:
+                await manager.send(
+                    {"type": "error", "content": "Invalid JSON"},
+                    websocket
+                )
                 continue
+
+            # ✅ Handle ping (keep-alive)
+            if payload.get("type") == "ping":
+                await manager.send({"type": "pong"}, websocket)
+                continue
+
+            message = payload.get("message")
+
+            if not message:
+                await manager.send(
+                    {"type": "error", "content": "Empty message"},
+                    websocket
+                )
+                continue
+
             response = await call_llm(message, session_id)
-            await manager.send({"type": "result", "content": response}, websocket)
+
+            await manager.send(
+                {"type": "result", "content": response},
+                websocket
+            )
+
     except WebSocketDisconnect:
         manager.disconnect(websocket, session_id)
-    except json.JSONDecodeError:
-        await manager.send({"type": "error", "content": "Malformed JSON message."}, websocket)
-        manager.disconnect(websocket, session_id)
 
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+        manager.disconnect(websocket, session_id)
 
 @app.get("/api/health")
 def health():
@@ -461,4 +487,12 @@ def add_calendar_event(sid: str, payload: CalendarCreateRequest, db: Session = D
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", 8000))  # ✅ REQUIRED FOR RENDER
+
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=port,
+        ws="auto",              # ✅ ensures websocket support
+        log_level="info"
+    )

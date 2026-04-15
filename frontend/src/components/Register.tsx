@@ -8,7 +8,6 @@ interface RegisterProps {
 
 export const Register: React.FC<RegisterProps> = ({ onSwitchToLogin }) => {
   const { register } = useAuth();
-  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -35,7 +34,7 @@ export const Register: React.FC<RegisterProps> = ({ onSwitchToLogin }) => {
     setLoading(true);
 
     try {
-      await register(email, password, name);
+      await register(email, password);
       console.log('Registration successful!');
       setSuccess('Account created successfully. Please sign in.');
       onSwitchToLogin();
@@ -63,23 +62,6 @@ export const Register: React.FC<RegisterProps> = ({ onSwitchToLogin }) => {
 
           {/* Form */}
           <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Name */}
-            <div>
-              <label className="block text-xs font-bold text-[#c9d1d9] uppercase tracking-[0.1em] mb-2">
-                Full Name
-              </label>
-              <div className="relative">
-                <User className="absolute left-4 top-3.5 text-[#6b7fa8]" size={18} />
-                <input
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="Your name"
-                  className="w-full bg-[#161b22] border border-[#30363d] rounded-xl pl-12 pr-4 py-3 text-white placeholder-[#6b7fa8] focus:outline-none focus:border-[#29d8a8] transition-colors"
-                />
-              </div>
-            </div>
-
             {/* Email */}
             <div>
               <label className="block text-xs font-bold text-[#c9d1d9] uppercase tracking-[0.1em] mb-2">

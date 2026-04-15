@@ -68,7 +68,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const register = async (email: string, password: string, name?: string) => {
+  const register = async (email: string, password: string) => {
     setLoading(true);
     const apiUrl = `${import.meta.env.VITE_API_URL || 'https://mbaza-mzf3.onrender.com'}/api/auth/register`;
     console.log('Calling register endpoint:', apiUrl);

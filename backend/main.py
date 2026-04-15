@@ -14,37 +14,43 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from google import genai
+from google.genai import types
 from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import Boolean, Column, DateTime, Integer, String, create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
+# ---------------- LOGGING ----------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("mbaza-backend")
 
+# ---------------- ENV ----------------
 env_path = Path(__file__).parent / ".env"
 if env_path.exists():
     load_dotenv(env_path)
 
-GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
-if not GEMINI_KEY and env_path.exists():
-    # Handle UTF-8 BOM in .env (common on Windows editors)
-    for line in env_path.read_text(encoding="utf-8-sig").splitlines():
-        if line.strip().startswith("GEMINI_API_KEY="):
-            GEMINI_KEY = line.split("=", 1)[1].strip().strip("\"'")
-            break
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-OLLAMA_URL = os.getenv("OLLAMA_URL", "https://mbaza-mzf3.onrender.com/api/generate")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL is required")
+
+# Fix Render / old Postgres format
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+# ---------------- GEMINI / OLLAMA ----------------
+GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 LOCAL_MODEL = os.getenv("OLLAMA_MODEL", "gemma3:1b")
+
 JWT_SECRET = os.getenv("JWT_SECRET", "change-this-secret-before-deploy")
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = int(os.getenv("ACCESS_TOKEN_EXPIRE_DAYS", "7"))
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./autodev_enterprise.db")
+
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 GEMINI_TIMEOUT_SECONDS = float(os.getenv("GEMINI_TIMEOUT_SECONDS", "6"))
 OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "45"))
-GEMINI_BACKOFF_SECONDS = int(os.getenv("GEMINI_BACKOFF_SECONDS", "120"))
-OLLAMA_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "180"))
+
 MBAZA_SYSTEM_PROMPT = (
     "You are Mbaza, an expert youth sexual and reproductive health consultant. "
     "Answer with practical, medically-sound sexology guidance. "
@@ -56,13 +62,11 @@ MBAZA_SYSTEM_PROMPT = (
     "never output self-therapy monologues, and do not invent clinical facts. "
     "Be clear, respectful, and direct; use short structured guidance with actionable steps."
 )
-
-if JWT_SECRET == "change-this-secret-before-deploy":
-    logger.warning("JWT_SECRET is using default value. Set a strong secret before deployment.")
-
 client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 
-app = FastAPI(title="Mbaza - AI Consultant")
+# ---------------- FASTAPI ----------------
+app = FastAPI(title="Mbaza Backend")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -70,88 +74,73 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 Instrumentator().instrument(app).expose(app)
 
+# ---------------- DATABASE ----------------
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {},
+    pool_pre_ping=True,
+    pool_recycle=300,
+    future=True,
 )
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 class Base(DeclarativeBase):
     pass
 
-
+# ---------------- MODELS ----------------
 class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True)
-    email = Column(String, unique=True, nullable=False, index=True)
+    email = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
-    is_active = Column(Boolean, default=True, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 class CalendarEvent(Base):
     __tablename__ = "calendar_events"
 
     id = Column(Integer, primary_key=True)
-    session_id = Column(String, index=True, nullable=False)
-    title = Column(String, nullable=False)
-    event_date = Column(DateTime, nullable=False)
-    category = Column(String, nullable=False)
-
+    session_id = Column(String, index=True)
+    title = Column(String)
+    event_date = Column(DateTime)
+    category = Column(String)
 
 class PeriodTracker(Base):
     __tablename__ = "period_tracker"
 
     id = Column(Integer, primary_key=True)
-    session_id = Column(String, index=True, nullable=False)
-    start_date = Column(DateTime, nullable=False)
-    intensity = Column(String, nullable=False)
-    notes = Column(String, default="", nullable=False)
-
+    session_id = Column(String, index=True)
+    start_date = Column(DateTime)
+    intensity = Column(String)
+    notes = Column(String)
 
 Base.metadata.create_all(bind=engine)
 
-
+# ---------------- SCHEMAS ----------------
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str
     name: Optional[str] = None
 
-
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
 
-
-class AuthUser(BaseModel):
-    id: str
-    email: str
-    name: Optional[str] = None
-
-
-class AuthResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-    user: AuthUser
-
-
 class CalendarCreateRequest(BaseModel):
     title: str
-    description: Optional[str] = None
     event_date: str
     category: str = "health"
-
 
 class PeriodCreateRequest(BaseModel):
     start_date: str
     intensity: str
     notes: Optional[str] = None
 
-
+# ---------------- DB SESSION ----------------
 def get_db():
     db = SessionLocal()
     try:
@@ -159,340 +148,218 @@ def get_db():
     finally:
         db.close()
 
+# ---------------- UTILS ----------------
+def hash_password(p: str):
+    return bcrypt.hashpw(p.encode(), bcrypt.gensalt()).decode()
 
-def parse_iso_datetime(value: str) -> datetime:
-    cleaned = value.strip()
-    if not cleaned:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Date value cannot be empty")
+def verify_password(p: str, h: str):
+    return bcrypt.checkpw(p.encode(), h.encode())
 
-    if "T" not in cleaned and len(cleaned) == 10:
-        return datetime.combine(date.fromisoformat(cleaned), datetime.min.time())
-    return datetime.fromisoformat(cleaned)
-
-
-def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-
-
-def verify_password(password: str, hashed_password: str) -> bool:
-    return bcrypt.checkpw(password.encode("utf-8"), hashed_password.encode("utf-8"))
-
-
-def create_access_token(user_id: int, email: str) -> str:
-    expires_at = datetime.utcnow() + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
-    payload = {"sub": str(user_id), "email": email, "exp": expires_at}
+def create_token(user_id: int, email: str):
+    payload = {
+        "sub": str(user_id),
+        "email": email,
+        "exp": datetime.utcnow() + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS),
+    }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
+def parse_date(v: str):
+    if "T" not in v and len(v) == 10:
+        return datetime.combine(date.fromisoformat(v), datetime.min.time())
+    return datetime.fromisoformat(v)
 
+# ---------------- MEMORY ----------------
 session_memories: Dict[str, List[Dict[str, str]]] = {}
-gemini_backoff_until: Optional[datetime] = None
+MAX_CHAT_HISTORY = 10
 
+def build_chat_prompt(sid: str, user_message: str) -> str:
+    history = session_memories.get(sid, [])[-MAX_CHAT_HISTORY:]
+    prompt_parts = [f"Session ID: {sid}"]
 
-def infer_topic(prompt: str, history: List[dict]) -> str:
-    prompt_l = prompt.lower().strip()
-    recent = " ".join([m.get("content", "") for m in history[-4:]]).lower()
+    if history:
+        prompt_parts.append("Recent conversation:")
+        for item in history:
+            role = item.get("role", "user").capitalize()
+            content = item.get("content", "").strip()
+            if content:
+                prompt_parts.append(f"{role}: {content}")
 
-    # Detect topic directly from current prompt first.
-    if any(k in prompt_l for k in ["menstru", "mentru", "period", "cycle", "cramp", "pms", "flow"]):
-        return "menstruation"
-    if any(k in prompt_l for k in ["unprotected", "pregnan", "emergency contraception", "plan b"]):
-        return "pregnancy-risk"
-    if any(k in prompt_l for k in ["sti", "std", "hiv", "exposure", "test"]):
-        return "sti-risk"
+    prompt_parts.append(f"User: {user_message.strip()}")
+    prompt_parts.append("Assistant:")
+    return "\n".join(prompt_parts)
 
-    # Use recent context only for clear follow-up phrasing.
-    is_followup = bool(
-        re.search(r"\b(it|this|that)\b", prompt_l)
-        or "those symptoms" in prompt_l
-        or "control it" in prompt_l
-        or "manage it" in prompt_l
-    )
-    if is_followup and any(k in recent for k in ["menstru", "mentru", "period", "cycle", "cramp", "pms", "flow"]):
-        return "menstruation"
-    if is_followup and any(k in recent for k in ["unprotected", "pregnan", "emergency contraception", "plan b"]):
-        return "pregnancy-risk"
-    if is_followup and any(k in recent for k in ["sti", "std", "hiv", "exposure", "test"]):
-        return "sti-risk"
+def store_message(sid: str, role: str, content: str) -> None:
+    session_memories.setdefault(sid, []).append({"role": role, "content": content})
+    session_memories[sid] = session_memories[sid][-MAX_CHAT_HISTORY:]
 
-    return "general"
+def get_gemini_reply(prompt: str) -> str:
+    if not client:
+        raise RuntimeError("Gemini API key is not configured")
 
-
-def is_sexology_prompt(prompt: str, history: List[dict]) -> bool:
-    prompt_l = prompt.lower().strip()
-    if re.fullmatch(r"(h+i+|he+l+o+|hey+|yo+|hola+)[!?. ]*", prompt_l):
-        return True
-    return infer_topic(prompt, history) != "general"
-
-
-def out_of_scope_response() -> str:
-    return (
-        "I only answer sexology and reproductive-health questions. "
-        "Please ask about topics like puberty, menstruation, contraception, STI risk/testing, consent, or relationships."
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            systemInstruction=MBAZA_SYSTEM_PROMPT,
+            temperature=0.4,
+            maxOutputTokens=400,
+        ),
     )
 
+    text = getattr(response, "text", None)
+    if text and text.strip():
+        return text.strip()
 
-def local_fallback_response(prompt: str, history: Optional[List[dict]] = None) -> str:
-    return (
-        "Live AI is temporarily unavailable. Please retry your sexology question in a moment."
-    )
+    raise RuntimeError("Gemini returned an empty response")
 
+async def get_ollama_reply(prompt: str) -> str:
+    payload = {
+        "model": LOCAL_MODEL,
+        "prompt": f"{MBAZA_SYSTEM_PROMPT}\n\n{prompt}",
+        "stream": False,
+    }
 
-def sanitize_assistant_response(response_text: str, prompt: str) -> str:
-    lower = response_text.lower()
+    timeout = httpx.Timeout(OLLAMA_TIMEOUT_SECONDS)
+    async with httpx.AsyncClient(timeout=timeout) as http_client:
+        response = await http_client.post(OLLAMA_URL, json=payload)
+        response.raise_for_status()
+        data = response.json()
 
-    invalid_markers = [
-        "i'm feeling",
-        "i feel overwhelmed",
-        "thank you for offering me the chance to be here",
-        "i appreciate you trusting me",
-    ]
-    if any(marker in lower for marker in invalid_markers):
-        return local_fallback_response(prompt)
-    return response_text
+    text = (data.get("response") or "").strip()
+    if text:
+        return text
 
+    raise RuntimeError("Ollama returned an empty response")
 
-async def call_ollama(prompt: str, history: List[dict]) -> str:
-    full_prompt = f"System: {MBAZA_SYSTEM_PROMPT}\n\n"
-    for message in history:
-        full_prompt += f"{message['role']}: {message['content']}\n"
-    full_prompt += f"user: {prompt}\nmodel:"
+async def generate_chat_reply(sid: str, user_message: str) -> str:
+    prompt = build_chat_prompt(sid, user_message)
+    errors: List[str] = []
+
+    if client:
+        try:
+            return await asyncio.to_thread(get_gemini_reply, prompt)
+        except Exception as exc:
+            logger.exception("Gemini chat request failed for session %s", sid)
+            errors.append(f"Gemini: {exc}")
 
     try:
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(OLLAMA_TIMEOUT_SECONDS, connect=2.0),
-            trust_env=False,
-        ) as http_client:
-            response = await http_client.post(
-                OLLAMA_URL,
-                json={
-                    "model": LOCAL_MODEL,
-                    "prompt": full_prompt,
-                    "stream": False,
-                    "keep_alive": "10m",
-                    "options": {"num_predict": OLLAMA_NUM_PREDICT, "temperature": 0.4},
-                },
-            )
-            response.raise_for_status()
-            payload = response.json()
-            text = payload.get("response", "No response from local AI.")
-            return sanitize_assistant_response(text, prompt)
-    except (httpx.HTTPError, httpx.TimeoutException) as exc:
-        logger.warning("Ollama fallback failed: %s", exc)
-        return local_fallback_response(prompt, history)
+        return await get_ollama_reply(prompt)
+    except Exception as exc:
+        logger.exception("Ollama chat request failed for session %s", sid)
+        errors.append(f"Ollama: {exc}")
 
+    logger.error("All chat providers failed for session %s: %s", sid, " | ".join(errors))
+    return (
+        "I could not reach the AI provider right now. "
+        "Please check `GEMINI_API_KEY` or make sure Ollama is running, then try again."
+    )
 
-async def call_llm(prompt: str, session_id: str) -> str:
-    global gemini_backoff_until
-
-    if session_id not in session_memories:
-        session_memories[session_id] = []
-    history = session_memories[session_id][-4:]
-    if not is_sexology_prompt(prompt, history):
-        response_text = out_of_scope_response()
-        session_memories[session_id].append({"role": "user", "content": prompt})
-        session_memories[session_id].append({"role": "assistant", "content": response_text})
-        return response_text
-
-    can_try_gemini = client and (not gemini_backoff_until or datetime.utcnow() >= gemini_backoff_until)
-    if can_try_gemini:
-        try:
-            contents = []
-            for message in history:
-                role = "model" if message["role"] == "assistant" else "user"
-                contents.append({"role": role, "parts": [{"text": message["content"]}]})
-            contents.append({"role": "user", "parts": [{"text": prompt}]})
-
-            gemini_call = client.aio.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=contents,
-                config={"system_instruction": MBAZA_SYSTEM_PROMPT},
-            )
-            response = await asyncio.wait_for(gemini_call, timeout=GEMINI_TIMEOUT_SECONDS)
-            if response and response.text:
-                clean_text = sanitize_assistant_response(response.text, prompt)
-                session_memories[session_id].append({"role": "user", "content": prompt})
-                session_memories[session_id].append({"role": "assistant", "content": clean_text})
-                return clean_text
-        except (asyncio.TimeoutError, httpx.HTTPError, RuntimeError, TypeError, ValueError) as exc:
-            logger.warning("Gemini call failed: %s", exc)
-            gemini_backoff_until = datetime.utcnow() + timedelta(seconds=GEMINI_BACKOFF_SECONDS)
-    elif client:
-        logger.info("Skipping Gemini until backoff ends at %s", gemini_backoff_until.isoformat())
-
-    logger.info("Falling back to Ollama...")
-    fallback_response = await call_ollama(prompt, history)
-    session_memories[session_id].append({"role": "user", "content": prompt})
-    session_memories[session_id].append({"role": "assistant", "content": fallback_response})
-    return fallback_response
-
-
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: Dict[str, List[WebSocket]] = {}
-
-    async def connect(self, websocket: WebSocket, session_id: str):
-        await websocket.accept()
-        if session_id not in self.active_connections:
-            self.active_connections[session_id] = []
-        self.active_connections[session_id].append(websocket)
-
-    def disconnect(self, websocket: WebSocket, session_id: str):
-        if session_id in self.active_connections and websocket in self.active_connections[session_id]:
-            self.active_connections[session_id].remove(websocket)
-
-    async def send(self, message: dict, websocket: WebSocket):
-        try:
-            await websocket.send_json(message)
-        except (WebSocketDisconnect, RuntimeError) as exc:
-            logger.warning("WebSocket send failed: %s", exc)
-
-
-manager = ConnectionManager()
-
-
-@app.websocket("/ws/{session_id}")
-async def websocket_endpoint(websocket: WebSocket, session_id: str):
-    await manager.connect(websocket, session_id)
-
-    try:
-        while True:
-            data = await websocket.receive_text()
-
-            try:
-                payload = json.loads(data)
-            except json.JSONDecodeError:
-                await manager.send(
-                    {"type": "error", "content": "Invalid JSON"},
-                    websocket
-                )
-                continue
-
-            # ✅ Handle ping (keep-alive)
-            if payload.get("type") == "ping":
-                await manager.send({"type": "pong"}, websocket)
-                continue
-
-            message = payload.get("message")
-
-            if not message:
-                await manager.send(
-                    {"type": "error", "content": "Empty message"},
-                    websocket
-                )
-                continue
-
-            response = await call_llm(message, session_id)
-
-            await manager.send(
-                {"type": "result", "content": response},
-                websocket
-            )
-
-    except WebSocketDisconnect:
-        manager.disconnect(websocket, session_id)
-
-    except Exception as e:
-        logger.error(f"WebSocket error: {e}")
-        manager.disconnect(websocket, session_id)
-
-@app.get("/api/health")
-def health():
-    return {"status": "ok", "name": "Mbaza"}
-
-
-@app.post("/api/auth/register", response_model=AuthResponse)
+# ---------------- AUTH ----------------
+@app.post("/api/auth/register")
 def register(payload: RegisterRequest, db: Session = Depends(get_db)):
-    email = payload.email.lower().strip()
-    if len(payload.password) < 6:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password must be at least 6 characters")
+    email = payload.email.lower()
 
-    existing_user = db.query(User).filter(User.email == email).first()
-    if existing_user:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
+    if db.query(User).filter(User.email == email).first():
+        raise HTTPException(400, "Email already exists")
 
     user = User(email=email, hashed_password=hash_password(payload.password))
     db.add(user)
     db.commit()
     db.refresh(user)
 
-    token = create_access_token(user.id, user.email)
-    return AuthResponse(
-        access_token=token,
-        user=AuthUser(id=str(user.id), email=user.email, name=payload.name),
-    )
+    return {
+        "access_token": create_token(user.id, user.email),
+        "user": {"id": user.id, "email": user.email},
+    }
 
-
-@app.post("/api/auth/login", response_model=AuthResponse)
+@app.post("/api/auth/login")
 def login(payload: LoginRequest, db: Session = Depends(get_db)):
-    email = payload.email.lower().strip()
-    user = db.query(User).filter(User.email == email).first()
+    user = db.query(User).filter(User.email == payload.email.lower()).first()
+
     if not user or not verify_password(payload.password, user.hashed_password):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
+        raise HTTPException(401, "Invalid credentials")
 
-    token = create_access_token(user.id, user.email)
-    return AuthResponse(
-        access_token=token,
-        user=AuthUser(id=str(user.id), email=user.email),
-    )
+    return {
+        "access_token": create_token(user.id, user.email),
+        "user": {"id": user.id, "email": user.email},
+    }
 
-
-@app.get("/api/period/{sid}")
-def get_period_entries(sid: str, db: Session = Depends(get_db)):
-    return db.query(PeriodTracker).filter(PeriodTracker.session_id == sid).all()
-
-
-@app.post("/api/period/{sid}")
-def add_period_entry(sid: str, payload: PeriodCreateRequest, db: Session = Depends(get_db)):
-    try:
-        start_date = parse_iso_datetime(payload.start_date)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid start_date format") from exc
-
-    entry = PeriodTracker(
-        session_id=sid,
-        start_date=start_date,
-        intensity=payload.intensity,
-        notes=(payload.notes or "").strip(),
-    )
-    db.add(entry)
-    db.commit()
-    db.refresh(entry)
-    return entry
-
-
-@app.get("/api/calendar/{sid}")
-def get_calendar_events(sid: str, db: Session = Depends(get_db)):
-    return db.query(CalendarEvent).filter(CalendarEvent.session_id == sid).all()
-
-
+# ---------------- CALENDAR ----------------
 @app.post("/api/calendar/{sid}")
-def add_calendar_event(sid: str, payload: CalendarCreateRequest, db: Session = Depends(get_db)):
-    try:
-        event_date = parse_iso_datetime(payload.event_date)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid event_date format") from exc
-
+def add_event(sid: str, payload: CalendarCreateRequest, db: Session = Depends(get_db)):
     event = CalendarEvent(
         session_id=sid,
-        title=payload.title.strip(),
-        event_date=event_date,
-        category=(payload.category or "health").strip(),
+        title=payload.title,
+        event_date=parse_date(payload.event_date),
+        category=payload.category,
     )
     db.add(event)
     db.commit()
     db.refresh(event)
     return event
 
+@app.get("/api/calendar/{sid}")
+def get_events(sid: str, db: Session = Depends(get_db)):
+    return db.query(CalendarEvent).filter(CalendarEvent.session_id == sid).all()
 
+# ---------------- PERIOD ----------------
+@app.post("/api/period/{sid}")
+def add_period(sid: str, payload: PeriodCreateRequest, db: Session = Depends(get_db)):
+    entry = PeriodTracker(
+        session_id=sid,
+        start_date=parse_date(payload.start_date),
+        intensity=payload.intensity,
+        notes=payload.notes or "",
+    )
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+    return entry
+
+@app.get("/api/period/{sid}")
+def get_period(sid: str, db: Session = Depends(get_db)):
+    return db.query(PeriodTracker).filter(PeriodTracker.session_id == sid).all()
+
+# ---------------- HEALTH ----------------
+@app.get("/api/health")
+def health():
+    return {"status": "ok"}
+
+# ---------------- WEBSOCKET ----------------
+class ConnectionManager:
+    def __init__(self):
+        self.active: Dict[str, List[WebSocket]] = {}
+
+    async def connect(self, ws: WebSocket, sid: str):
+        await ws.accept()
+        self.active.setdefault(sid, []).append(ws)
+
+    def disconnect(self, ws: WebSocket, sid: str):
+        if sid in self.active and ws in self.active[sid]:
+            self.active[sid].remove(ws)
+
+manager = ConnectionManager()
+
+@app.websocket("/ws/{sid}")
+async def ws_endpoint(ws: WebSocket, sid: str):
+    await manager.connect(ws, sid)
+    try:
+        while True:
+            msg = await ws.receive_text()
+            cleaned_msg = msg.strip()
+            if not cleaned_msg:
+                await ws.send_json({"reply": "Please send a message so I can help."})
+                continue
+
+            store_message(sid, "user", cleaned_msg)
+            reply = await generate_chat_reply(sid, cleaned_msg)
+            store_message(sid, "assistant", reply)
+            await ws.send_json({"reply": reply})
+    except WebSocketDisconnect:
+        manager.disconnect(ws, sid)
+
+# ---------------- RUN ----------------
 if __name__ == "__main__":
     import uvicorn
-
-    port = int(os.environ.get("PORT", 8000))  # ✅ REQUIRED FOR RENDER
-
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=port,
-        ws="auto",              # ✅ ensures websocket support
-        log_level="info"
-    )
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)

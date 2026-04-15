@@ -209,6 +209,7 @@ export default function App() {
     if (!currentSessionId || !isAuthenticated) return;
 
     let isMounted = true;
+    let shouldReconnect = true;
 
     const connect = () => {
       if (!isMounted) return;
@@ -226,20 +227,32 @@ export default function App() {
       };
 
       socket.onmessage = (event) => {
-        const data = JSON.parse(event.data);
+        try {
+          const data = JSON.parse(event.data);
+          const reply =
+            typeof data.reply === 'string'
+              ? data.reply
+              : typeof data.content === 'string'
+                ? data.content
+                : '';
 
-        if (data.type === "result") {
+          if (!reply) return;
+
           setMessages((prev) => [
             ...prev,
-            { role: "assistant", content: data.content },
+            { role: "assistant", content: reply },
           ]);
           setStatus("Ready");
+          setIsAiTyping(false);
+        } catch (error) {
+          console.error('Invalid WebSocket message:', error);
+          setStatus('Message error');
           setIsAiTyping(false);
         }
       };
 
       socket.onclose = () => {
-        if (!isMounted) return;
+        if (!isMounted || !shouldReconnect) return;
 
         const attempts = reconnectAttempts.current;
         const delay = Math.min(1000 * Math.pow(2, attempts), 10000);
@@ -257,16 +270,9 @@ export default function App() {
 
     connect();
 
-    // ✅ Keep-alive ping (prevents Render idle drop)
-    const pingInterval = setInterval(() => {
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ type: "ping" }));
-      }
-    }, 25000);
-
     return () => {
       isMounted = false;
-      clearInterval(pingInterval);
+      shouldReconnect = false;
       if (reconnectRef.current) clearTimeout(reconnectRef.current);
       if (wsRef.current) wsRef.current.close();
     };
@@ -276,8 +282,8 @@ export default function App() {
   const sendMessage = async () => {
     const inputEl = document.getElementById('main-input') as HTMLInputElement;
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && inputEl.value.trim() && !isAiTyping) {
-      const text = inputEl.value;
-      wsRef.current.send(JSON.stringify({ message: text }));
+      const text = inputEl.value.trim();
+      wsRef.current.send(text);
       setMessages(prev => [...prev, { role: 'user', content: text }]);
       inputEl.value = ''; setStatus('Thinking...'); setIsAiTyping(true);
     }

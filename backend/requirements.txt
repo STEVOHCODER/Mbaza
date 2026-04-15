@@ -1,41 +1,26 @@
 fastapi
 uvicorn[standard]
+gunicorn
 
-# API / validation
 pydantic[email]
 
-# Auth & security
 PyJWT
 passlib[bcrypt]
 
-# HTTP / scraping
 httpx
 beautifulsoup4
 
-# AI / integrations
 google-genai
 stripe
 
-# Data processing
-pandas
-numpy
-matplotlib
-scipy
-openpyxl
-xlsxwriter
-python-pptx
-pypdf
-
-# DB
 sqlalchemy
 psycopg2-binary
+asyncpg
 
-# Observability
 prometheus-fastapi-instrumentator
 
-# Utils
 python-dotenv
 websockets
 
-# Optional (only if used)
+# optional only if actually used
 redis

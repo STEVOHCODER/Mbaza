@@ -194,7 +194,7 @@ export default function App() {
     setMessages(sess?.messages || []); 
   };
 
-  const API_BASE_URL = import.meta.env.VITE_API_URL || '';
+  const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://mbaza-mzf3.onrender.com';
   const WS_URL = API_BASE_URL ? API_BASE_URL.replace('http', 'ws') : `ws://${window.location.hostname}:8000`;
 
   useEffect(() => {

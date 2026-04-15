@@ -34,7 +34,7 @@ if not GEMINI_KEY and env_path.exists():
             GEMINI_KEY = line.split("=", 1)[1].strip().strip("\"'")
             break
 
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434/api/generate")
+OLLAMA_URL = os.getenv("OLLAMA_URL", "https://mbaza-mzf3.onrender.com/api/generate")
 LOCAL_MODEL = os.getenv("OLLAMA_MODEL", "gemma3:1b")
 JWT_SECRET = os.getenv("JWT_SECRET", "change-this-secret-before-deploy")
 JWT_ALGORITHM = "HS256"
